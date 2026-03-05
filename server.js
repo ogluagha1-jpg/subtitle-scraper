@@ -77,7 +77,6 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
 
     const html = await resp.text();
 
-    // Extract iframe src from the HTML (e.g., src="https://vidora.stream/embed/e5ccbb10n1xp")
     const iframeMatch = html.match(/src="(https?:\/\/[^"]*vidora\.stream\/embed\/[^"]*)"/i)
         || html.match(/src="(https?:\/\/[^"]*embed[^"]*)"/i);
 
@@ -119,13 +118,11 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
         await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForTimeout(3000);
 
-        // Click center of page to trigger player (starts loading subtitles)
         const box = await page.locator("body").boundingBox();
         if (box) {
             await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         }
 
-        // Wait for subtitle files to load
         await page.waitForTimeout(5000);
     } catch (err) {
         console.error(`[STEP2] Navigation error: ${err.message}`);
@@ -134,11 +131,9 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     await page.close().catch(() => { });
     await context.close().catch(() => { });
 
-    // Filter for requested languages
     const filtered = vttUrls.filter((v) => langs.includes(v.code) || v.code === "und");
     console.log(`[STEP2] Total VTTs: ${vttUrls.length}, filtered: ${filtered.length}`);
 
-    // Download content for each filtered subtitle
     const results = [];
     for (const track of filtered) {
         try {
@@ -163,30 +158,30 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     return results;
 }
 
-// ─── API Endpoint ───────────────────────────────────────────────────────────
+// ─── Subtitle Endpoint ──────────────────────────────────────────────────────
 
-app.get("/get-subtitles", async (req, res) => {
-    const tmdb_id = req.query.tmdb_id;
+async function handleGetSubtitles(req, res) {
+    const data = req.method === "POST" ? req.body : req.query;
+    const tmdb_id = data.tmdb_id;
+
     if (!tmdb_id) {
         return res.status(400).json({ error: "Missing tmdb_id parameter" });
     }
 
-    const type = req.query.type || "movie";
-    const season = req.query.season;
-    const episode = req.query.episode;
-    const langs = (req.query.langs || "ar,en").split(",").map((l) => l.trim());
+    const type = data.type || "movie";
+    const season = data.season;
+    const episode = data.episode;
+    const langs = (data.langs || "ar,en").split(",").map((l) => l.trim());
 
     console.log(`\n════════════════════════════════════════════`);
-    console.log(`[API] Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")}`);
+    console.log(`[API] ${req.method} Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")}`);
 
     try {
-        // Step 1: Get the embed URL from moviesapi.club
         const embedUrl = await getEmbedUrl(tmdb_id, type, season, episode);
         if (!embedUrl) {
             return res.json({ tmdb_id, count: 0, subtitles: [], error: "No embed URL found" });
         }
 
-        // Step 2: Scrape subtitles from the embed player
         const subtitles = await scrapeSubtitles(embedUrl, langs);
 
         console.log(`[API] Returning ${subtitles.length} subtitles for tmdb_id=${tmdb_id}`);
@@ -195,7 +190,10 @@ app.get("/get-subtitles", async (req, res) => {
         console.error(`[API ERROR] ${err.message}`);
         res.status(500).json({ error: "Scraping failed", details: err.message });
     }
-});
+}
+
+app.get("/get-subtitles", handleGetSubtitles);
+app.post("/get-subtitles", handleGetSubtitles);
 
 app.get("/", (req, res) => {
     res.send("🎬 Subtitle Scraper API is running. Use /get-subtitles?tmdb_id=550");
@@ -209,8 +207,6 @@ app.listen(PORT, "0.0.0.0", () => {
         .then(() => console.log("Browser initialized. Ready to scrape."))
         .catch(err => {
             console.error("CRITICAL: Failed to initialize browser on startup:", err.message);
-            // We don't exit(1) because that causes a 503 cycle. 
-            // Better to let the app run and retry on the first request.
         });
 });
 
