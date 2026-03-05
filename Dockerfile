@@ -1,37 +1,29 @@
-# Use a Debian-based image for better compatibility with Playwright dependencies
-FROM node:20-bookworm
+# Use official Playwright image which has ALL dependencies pre-installed
+FROM mcr.microsoft.com/playwright:v1.49.0-noble
 
-# Set environment variable to install browsers in the app directory for persistence and permissions
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+# Set port for Hugging Face
 ENV PORT=7860
-
-# Install system dependencies required by Playwright/Chromium
-RUN apt-get update && apt-get install -y \
-    libgbm1 \
-    libasound2 \
-    libnss3 \
-    libxss1 \
-    libatk-bridge2.0-0 \
-    libgtk-3-0 \
-    && rm -rf /var/lib/apt/lists/*
+ENV HOME=/home/pwuser
 
 WORKDIR /app
 
-# Create a non-root user (Hugging Face uses UID 1000)
+# The official image creates a 'pwuser' with UID 1000, which matches Hugging Face
+# We'll use this user for permissions
 RUN chown -R 1000:1000 /app
+
 USER 1000
 
-# Copy package files first for better caching
+# Copy package files
 COPY --chown=1000:1000 package*.json ./
 RUN npm install
-
-# Install only the chromium browser in the specified path
-RUN npx playwright install chromium
 
 # Copy the rest of the application
 COPY --chown=1000:1000 . .
 
+# Playwright browsers are already in /ms-playwright in the base image
+# but we need to point to them if we want to use the pre-installed ones
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 EXPOSE 7860
 
 CMD ["node", "server.js"]
-
