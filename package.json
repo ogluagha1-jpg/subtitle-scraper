@@ -1,6 +1,8 @@
 {
   "name": "subtitle-scraper",
   "version": "1.0.0",
+  "type": "module",
+  "author": "Hugoglu99",
   "description": "Headless browser scraper for streaming subtitles",
   "main": "server.js",
   "scripts": {

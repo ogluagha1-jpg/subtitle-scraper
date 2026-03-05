@@ -6,7 +6,7 @@ import stealthPlugin from "puppeteer-extra-plugin-stealth";
 chromium.use(stealthPlugin());
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 7860;
 
 app.use(cors());
 app.use(express.json());
