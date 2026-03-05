@@ -1,70 +1,27 @@
-# Use a modern Node image
-FROM node:20-slim
+# Use the official Playwright image which includes all dependencies and browsers
+FROM mcr.microsoft.com/playwright:v1.42.1-jammy
 
-# Install system dependencies for Playwright/Chromium
-# These are the standard libs needed for headless browser on Debian/Ubuntu
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    libgbm-dev \
-    libnss3 \
-    libnspr4 \
-    libasound2 \
-    libatk1.0-0 \
-    libc6 \
-    libcairo2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libgcc1 \
-    libgconf-2-4 \
-    libgdk-pixbuf2.0-0 \
-    libglib2.0-0 \
-    libgtk-3-0 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libstdc++6 \
-    libx11-6 \
-    libx11-xcb1 \
-    libxcb1 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrandr2 \
-    libxrender1 \
-    libxss1 \
-    libxtst6 \
-    ca-certificates \
-    fonts-liberation \
-    libappindicator1 \
-    libnss3 \
-    lsb-release \
-    xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Hugging Face uses user 1000
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-WORKDIR /app
+WORKDIR $HOME/app
 
-# User 1000 is the default for Hugging Face Spaces
-RUN chown -R 1000:1000 /app
-USER 1000
+# Playwright image already has browsers in a global location, 
+# so we don't need to install them again or set custom paths.
 
-# Install dependencies in the app's internal folder
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
-
-COPY --chown=1000:1000 package*.json ./
+COPY --chown=user package*.json ./
 RUN npm install
 
-# Install Chromium browser binary
-RUN npx playwright install chromium
+# Copy application files
+COPY --chown=user . .
 
-COPY --chown=1000:1000 . .
-
+# Hugging Face requirement
 ENV PORT=7860
 EXPOSE 7860
 
 CMD ["node", "server.js"]
+
 
