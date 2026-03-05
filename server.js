@@ -203,9 +203,15 @@ app.get("/", (req, res) => {
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`Subtitle Scraper API listening on port ${PORT}`);
-    getBrowser().then(() => console.log("Browser initialized. Ready to scrape."));
+    getBrowser()
+        .then(() => console.log("Browser initialized. Ready to scrape."))
+        .catch(err => {
+            console.error("CRITICAL: Failed to initialize browser on startup:", err.message);
+            // We don't exit(1) because that causes a 503 cycle. 
+            // Better to let the app run and retry on the first request.
+        });
 });
 
 process.on("SIGINT", async () => {

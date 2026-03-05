@@ -1,3 +1,13 @@
+---
+title: Subtitle Scraper
+emoji: 🎬
+colorFrom: red
+colorTo: black
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Subtitle Scraper API
 
 A Node.js + Playwright API that extracts subtitles from streaming movie players.
