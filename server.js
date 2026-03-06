@@ -13,22 +13,22 @@ app.use(express.json());
 
 // Language detection from VTT filenames
 const LANG_PATTERNS = [
-    { pattern: /_eng\.vtt/i, lang: "English", code: "en" },
-    { pattern: /_ara\.vtt/i, lang: "Arabic", code: "ar" },
-    { pattern: /_fre\.vtt/i, lang: "French", code: "fr" },
-    { pattern: /_spa\.vtt/i, lang: "Spanish", code: "es" },
-    { pattern: /_ger\.vtt/i, lang: "German", code: "de" },
-    { pattern: /_tur\.vtt/i, lang: "Turkish", code: "tr" },
-    { pattern: /_por\.vtt/i, lang: "Portuguese", code: "pt" },
-    { pattern: /_ita\.vtt/i, lang: "Italian", code: "it" },
-    { pattern: /_dut\.vtt/i, lang: "Dutch", code: "nl" },
-    { pattern: /_rus\.vtt/i, lang: "Russian", code: "ru" },
-    { pattern: /_chi\.vtt/i, lang: "Chinese", code: "zh" },
-    { pattern: /_jpn\.vtt/i, lang: "Japanese", code: "ja" },
-    { pattern: /_kor\.vtt/i, lang: "Korean", code: "ko" },
-    { pattern: /_hin\.vtt/i, lang: "Hindi", code: "hi" },
-    { pattern: /_ind\.vtt/i, lang: "Indonesian", code: "id" },
-    { pattern: /_may\.vtt/i, lang: "Malay", code: "ms" },
+    { pattern: /(_eng|[-_]en)\.vtt/i, lang: "English", code: "en" },
+    { pattern: /(_ara|[-_]ar)\.vtt/i, lang: "Arabic", code: "ar" },
+    { pattern: /(_fre|[-_]fr)\.vtt/i, lang: "French", code: "fr" },
+    { pattern: /(_spa|[-_]es)\.vtt/i, lang: "Spanish", code: "es" },
+    { pattern: /(_ger|[-_]de)\.vtt/i, lang: "German", code: "de" },
+    { pattern: /(_tur|[-_]tr)\.vtt/i, lang: "Turkish", code: "tr" },
+    { pattern: /(_por|[-_]pt)\.vtt/i, lang: "Portuguese", code: "pt" },
+    { pattern: /(_ita|[-_]it)\.vtt/i, lang: "Italian", code: "it" },
+    { pattern: /(_dut|[-_]nl)\.vtt/i, lang: "Dutch", code: "nl" },
+    { pattern: /(_rus|[-_]ru)\.vtt/i, lang: "Russian", code: "ru" },
+    { pattern: /(_chi|[-_]zh)\.vtt/i, lang: "Chinese", code: "zh" },
+    { pattern: /(_jpn|[-_]ja)\.vtt/i, lang: "Japanese", code: "ja" },
+    { pattern: /(_kor|[-_]ko)\.vtt/i, lang: "Korean", code: "ko" },
+    { pattern: /(_hin|[-_]hi)\.vtt/i, lang: "Hindi", code: "hi" },
+    { pattern: /(_ind|[-_]id)\.vtt/i, lang: "Indonesian", code: "id" },
+    { pattern: /(_may|[-_]ms)\.vtt/i, lang: "Malay", code: "ms" },
     { pattern: /_sli\.vtt/i, lang: "Slovenian", code: "sl" },
 ];
 
@@ -117,6 +117,47 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     try {
         await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForTimeout(3000);
+
+        // Try extracting tracks directly from DOM/JWPlayer config (More reliable)
+        const tracks = await page.evaluate(() => {
+            const found = [];
+
+            // 1. Look for JWPlayer tracks
+            if (window.jwplayer && window.jwplayer().getConfig) {
+                const config = window.jwplayer().getConfig();
+                if (config.playlist && config.playlist[0] && config.playlist[0].tracks) {
+                    config.playlist[0].tracks.forEach(t => {
+                        if (t.file && (t.file.includes('.vtt') || t.file.includes('.srt'))) {
+                            found.push(t.file);
+                        }
+                    });
+                }
+            }
+
+            // 2. Look for script tags with JSON configs
+            document.querySelectorAll('script').forEach(s => {
+                const content = s.textContent;
+                if (content.includes('tracks') && content.includes('.vtt')) {
+                    const matches = content.match(/https?:\/\/[^"']+\.(vtt|srt)[^"']*/g);
+                    if (matches) found.push(...matches);
+                }
+            });
+
+            // 3. Look for video/track elements
+            document.querySelectorAll('track').forEach(t => {
+                if (t.src) found.push(t.src);
+            });
+
+            return found;
+        });
+
+        tracks.forEach(url => {
+            if (!vttUrls.find(v => v.url === url)) {
+                const { lang, code } = detectLang(url);
+                console.log(`[STEP2] Found subtitle (DOM): ${url}`);
+                vttUrls.push({ url, lang, code });
+            }
+        });
 
         const box = await page.locator("body").boundingBox();
         if (box) {
