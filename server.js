@@ -61,34 +61,38 @@ function detectLang(url) {
 async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
     let pageUrl;
     if (type === "tv" && season && episode) {
-        pageUrl = `https://moviesapi.to/tv/${tmdbId}-${season}-${episode}`;
+        pageUrl = `https://ww2.moviesapi.to/tv/${tmdbId}-${season}-${episode}`;
     } else {
-        pageUrl = `https://moviesapi.to/movie/${tmdbId}`;
+        pageUrl = `https://ww2.moviesapi.to/movie/${tmdbId}`;
     }
 
     console.log(`[STEP1] Fetching ${pageUrl} via Playwright...`);
     const b = await getBrowser();
     const context = await b.newContext({
-        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     });
     const page = await context.newPage();
 
     try {
-        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.goto(pageUrl, { waitUntil: "networkidle", timeout: 25000 });
 
         // Wait for potential redirects and iframe loading
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(4000);
 
         // Find the most likely player iframe
         const embedUrl = await page.evaluate(() => {
             const iframes = Array.from(document.querySelectorAll('iframe'));
-            // prioritize vidora, flixcdn, or any src with 'embed'
+            // prioritize known domains, then fall back to any iframe with src
             const playerIframe = iframes.find(f =>
-                f.src.includes('vidora.stream') ||
-                f.src.includes('flixcdn.cyou') ||
-                f.src.includes('/embed/') ||
-                f.src.includes('vidsrc')
-            );
+                f.src && (
+                    f.src.includes('vidora.stream') ||
+                    f.src.includes('flixcdn.cyou') ||
+                    f.src.includes('/embed/') ||
+                    f.src.includes('vidsrc') ||
+                    f.src.includes('rabbitstream') ||
+                    f.src.includes('2embed')
+                )
+            ) || iframes.find(f => f.src && f.src.startsWith('http'));
             return playerIframe ? playerIframe.src : null;
         });
 
@@ -99,14 +103,19 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
 
         // Fallback to searching the whole HTML if iframe not found via selector
         const html = await page.content();
-        const iframeMatch = html.match(/src="(https?:\/\/[^"]+(vidora\.stream|flixcdn\.cyou|vidsrc|embed)[^"]*)"/i);
+        const iframeMatch = html.match(/src=["'](https?:\/\/[^"']+(vidora\.stream|flixcdn\.cyou|vidsrc|embed|rabbitstream|2embed)[^"']*)["']/i)
+            || html.match(/src=["'](https?:\/\/[^"']+)["'].*?<\/iframe>/i);
 
         if (iframeMatch) {
             console.log(`[STEP1] Found embed URL (Regex): ${iframeMatch[1]}`);
             return iframeMatch[1];
         }
 
-        console.log(`[STEP1] No player iframe found for ID ${tmdbId}`);
+        // Log HTML for debugging when nothing is found
+        const pageText = await page.evaluate(() => document.body?.innerText || '');
+        console.log(`[STEP1] No player iframe found for ID ${tmdbId}. Page text: ${pageText.substring(0, 300)}`);
+        console.log(`[STEP1] Page URL after redirects: ${page.url()}`);
+        console.log(`[STEP1] Iframes found: ${await page.evaluate(() => document.querySelectorAll('iframe').length)}`);
         return null;
     } catch (err) {
         console.error(`[STEP1 ERROR] ${err.message}`);
