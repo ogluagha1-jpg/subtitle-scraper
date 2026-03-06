@@ -81,7 +81,7 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
         || html.match(/src="(https?:\/\/[^"]*embed[^"]*)"/i);
 
     if (!iframeMatch) {
-        console.log(`[STEP1] Could not find embed iframe in HTML`);
+        console.log(`[STEP1] Could not find embed iframe in HTML. HTML sample: ${html.substring(0, 500)}`);
         return null;
     }
 
@@ -152,9 +152,10 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
         });
 
         tracks.forEach(url => {
+            console.log(`[STEP2] Evaluated Track: ${url}`);
             if (!vttUrls.find(v => v.url === url)) {
                 const { lang, code } = detectLang(url);
-                console.log(`[STEP2] Found subtitle (DOM): ${url}`);
+                console.log(`[STEP2] Found subtitle (DOM): ${url} [${code}]`);
                 vttUrls.push({ url, lang, code });
             }
         });
@@ -178,10 +179,12 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     const results = [];
     for (const track of filtered) {
         try {
-            console.log(`[DOWNLOAD] ${track.url}`);
+            console.log(`[DOWNLOAD] Attempting ${track.url}`);
             const resp = await fetch(track.url);
+            console.log(`[DOWNLOAD] Status: ${resp.status} for ${track.url}`);
             if (resp.ok) {
                 const content = await resp.text();
+                console.log(`[DOWNLOAD] Content length: ${content.length}`);
                 if (content.length > 50) {
                     results.push({
                         lang: track.lang,
