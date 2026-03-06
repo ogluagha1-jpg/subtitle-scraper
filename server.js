@@ -297,6 +297,11 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
 
 // ─── Subtitle Endpoint ──────────────────────────────────────────────────────
 
+// Add a simple ping endpoint to keep the server awake
+app.get("/ping", (req, res) => {
+    res.status(200).send("OK");
+});
+
 async function handleGetSubtitles(req, res) {
     const data = req.method === "POST" ? req.body : req.query;
     const tmdb_id = data.tmdb_id;
