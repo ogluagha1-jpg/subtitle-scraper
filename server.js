@@ -51,9 +51,6 @@ async function getBrowser() {
                 "--disable-gpu",
                 "--disable-extensions",
                 "--disable-background-networking",
-                "--single-process",
-                "--no-zygote",
-                "--js-flags=--max-old-space-size=256",
             ],
         });
         requestCount = 0;
@@ -420,4 +417,15 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
     if (browser) await browser.close();
     process.exit();
+});
+
+// Prevent crashes from killing the server
+process.on("uncaughtException", (err) => {
+    console.error("[CRASH GUARD] Uncaught exception:", err.message);
+    // Reset browser on crash
+    browser = null;
+});
+process.on("unhandledRejection", (reason) => {
+    console.error("[CRASH GUARD] Unhandled rejection:", reason?.message || reason);
+    browser = null;
 });
