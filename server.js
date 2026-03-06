@@ -36,7 +36,8 @@ const LANG_PATTERNS = [
 let browser;
 
 async function getBrowser() {
-    if (!browser) {
+    if (!browser || !browser.isConnected()) {
+        console.log("Launching fresh browser instance...");
         browser = await chromium.launch({
             headless: true,
             args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -46,8 +47,9 @@ async function getBrowser() {
 }
 
 function detectLang(url) {
+    const lowerUrl = url.toLowerCase();
     for (const { pattern, lang, code } of LANG_PATTERNS) {
-        if (pattern.test(url)) return { lang, code };
+        if (pattern.test(lowerUrl)) return { lang, code };
     }
     return { lang: "Unknown", code: "und" };
 }
@@ -249,10 +251,10 @@ app.get("/debug-screenshot", async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).send("URL required");
 
-    let browser;
+    let page;
     try {
-        browser = await getBrowser();
-        const page = await browser.newPage();
+        const browserInstance = await getBrowser();
+        page = await browserInstance.newPage();
         await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
         const buffer = await page.screenshot({ fullPage: true });
         res.setHeader('Content-Type', 'image/png');
@@ -260,7 +262,7 @@ app.get("/debug-screenshot", async (req, res) => {
     } catch (err) {
         res.status(500).send(err.message);
     } finally {
-        if (browser) await browser.close();
+        if (page) await page.close();
     }
 });
 
