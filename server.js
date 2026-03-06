@@ -46,10 +46,35 @@ async function getBrowser() {
     return browser;
 }
 
+// Label-to-ISO-code mapping for metadata-based subtitle labels
+const LABEL_TO_CODE = {
+    'arabic': 'ar', 'english': 'en', 'french': 'fr', 'spanish': 'es',
+    'german': 'de', 'turkish': 'tr', 'portuguese': 'pt', 'italian': 'it',
+    'dutch': 'nl', 'russian': 'ru', 'chinese': 'zh', 'japanese': 'ja',
+    'korean': 'ko', 'hindi': 'hi', 'indonesian': 'id', 'malay': 'ms',
+    'slovenian': 'sl', 'swedish': 'sv', 'norwegian': 'no', 'danish': 'da',
+    'finnish': 'fi', 'polish': 'pl', 'romanian': 'ro', 'croatian': 'hr',
+    'czech': 'cs', 'hungarian': 'hu', 'greek': 'el', 'thai': 'th',
+    'vietnamese': 'vi', 'hebrew': 'he', 'persian': 'fa', 'urdu': 'ur',
+};
+
+function labelToCode(label) {
+    if (!label) return null;
+    const base = label.toLowerCase().replace(/[\d\s]+$/g, '').trim(); // "English Hi2" -> "english hi" -> "english"
+    const clean = base.replace(/\s+hi$/i, '').trim(); // "english hi" -> "english"
+    return LABEL_TO_CODE[clean] || LABEL_TO_CODE[base] || null;
+}
+
 function detectLang(url) {
     const lowerUrl = url.toLowerCase();
     for (const { pattern, lang, code } of LANG_PATTERNS) {
         if (pattern.test(lowerUrl)) return { lang, code };
+    }
+    // Also check if the filename itself is a language name (e.g. /Arabic.vtt)
+    const filenameMatch = lowerUrl.match(/\/([a-z]+[\d]*)\.vtt/i);
+    if (filenameMatch) {
+        const code = labelToCode(filenameMatch[1]);
+        if (code) return { lang: filenameMatch[1], code };
     }
     return { lang: "Unknown", code: "und" };
 }
@@ -150,11 +175,19 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
             if (Array.isArray(decodedSubs)) {
                 decodedSubs.forEach(s => {
                     if (s.url && !vttUrls.find(v => v.url === s.url)) {
-                        const { lang, code } = detectLang(s.url);
-                        // If metadata provides a label, use it
-                        const finalLang = s.label || lang;
-                        console.log(`[STEP2] Found subtitle (URL Metadata - ${finalLang}): ${s.url}`);
-                        vttUrls.push({ url: s.url, lang: finalLang, code });
+                        let { lang, code } = detectLang(s.url);
+                        // If metadata provides a label, use it for both display and code
+                        if (s.label) {
+                            const labelCode = labelToCode(s.label);
+                            if (labelCode) {
+                                code = labelCode;
+                                lang = s.label;
+                            } else {
+                                lang = s.label;
+                            }
+                        }
+                        console.log(`[STEP2] Found subtitle (URL Metadata - ${lang} [${code}]): ${s.url}`);
+                        vttUrls.push({ url: s.url, lang, code });
                     }
                 });
             }
