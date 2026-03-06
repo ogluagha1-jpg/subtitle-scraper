@@ -299,7 +299,12 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     for (const track of filtered) {
         try {
             console.log(`[DOWNLOAD] Attempting ${track.url}`);
-            const resp = await fetch(track.url);
+            const resp = await fetch(track.url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                    'Referer': embedUrl
+                }
+            });
             console.log(`[DOWNLOAD] Status: ${resp.status} for ${track.url}`);
             if (resp.ok) {
                 const content = await resp.text();
