@@ -32,38 +32,18 @@ const LANG_PATTERNS = [
     { pattern: /_sli\.vtt/i, lang: "Slovenian", code: "sl" },
 ];
 
-// Global browser instance with memory management
+// Global browser instance
 let browser;
-let requestCount = 0;
-const MAX_REQUESTS_BEFORE_RECYCLE = 10; // Recycle browser every N requests
-let activeRequests = 0;
-const MAX_CONCURRENT = 2; // Max simultaneous scraping requests
 
 async function getBrowser() {
     if (!browser || !browser.isConnected()) {
         console.log("Launching fresh browser instance...");
         browser = await chromium.launch({
             headless: true,
-            args: [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-background-networking",
-            ],
+            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
         });
-        requestCount = 0;
     }
     return browser;
-}
-
-async function recycleBrowser() {
-    if (browser) {
-        console.log(`[MEMORY] Recycling browser after ${requestCount} requests...`);
-        try { await browser.close(); } catch (e) { /* ignore */ }
-        browser = null;
-    }
 }
 
 // Label-to-ISO-code mapping for metadata-based subtitle labels
@@ -177,6 +157,12 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
  */
 async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     console.log(`[STEP2] Scraping subtitles from ${embedUrl} ...`);
+    const b = await getBrowser();
+    const context = await b.newContext({
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    });
+    const page = await context.newPage();
+
     const vttUrls = [];
 
     // Check if the URL itself contains subtitle metadata (common in flixcdn)
@@ -210,87 +196,75 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
         // Not a URL with subs param or invalid JSON
     }
 
-    // MEMORY OPTIMIZATION: If we found subtitles in the URL metadata, skip Playwright!
-    if (vttUrls.length === 0) {
-        console.log(`[STEP2] No subtitles in URL metadata. Launching Playwright to hunt for tracks...`);
-        const b = await getBrowser();
-        const context = await b.newContext({
-            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        });
-        const page = await context.newPage();
+    page.on("request", (request) => {
+        const reqUrl = request.url();
+        if (/\.(vtt|srt)(\?.*)?$/i.test(reqUrl)) {
+            if (!vttUrls.find((v) => v.url === reqUrl)) {
+                const { lang, code } = detectLang(reqUrl);
+                console.log(`[STEP2] Found subtitle (${lang}): ${reqUrl}`);
+                vttUrls.push({ url: reqUrl, lang, code });
+            }
+        }
+    });
 
-        page.on("request", (request) => {
-            const reqUrl = request.url();
-            if (/\.(vtt|srt)(\?.*)?$/i.test(reqUrl)) {
-                if (!vttUrls.find((v) => v.url === reqUrl)) {
-                    const { lang, code } = detectLang(reqUrl);
-                    console.log(`[STEP2] Found subtitle (${lang}): ${reqUrl}`);
-                    vttUrls.push({ url: reqUrl, lang, code });
+    try {
+        await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(3000);
+
+        // Try extracting tracks directly from DOM/JWPlayer config (More reliable)
+        const tracks = await page.evaluate(() => {
+            const found = [];
+
+            // 1. Look for JWPlayer tracks
+            if (window.jwplayer && window.jwplayer().getConfig) {
+                const config = window.jwplayer().getConfig();
+                if (config.playlist && config.playlist[0] && config.playlist[0].tracks) {
+                    config.playlist[0].tracks.forEach(t => {
+                        if (t.file && (t.file.includes('.vtt') || t.file.includes('.srt'))) {
+                            found.push(t.file);
+                        }
+                    });
                 }
             }
-        });
 
-        try {
-            await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-            await page.waitForTimeout(3000);
-
-            // Try extracting tracks directly from DOM/JWPlayer config (More reliable)
-            const tracks = await page.evaluate(() => {
-                const found = [];
-
-                // 1. Look for JWPlayer tracks
-                if (window.jwplayer && window.jwplayer().getConfig) {
-                    const config = window.jwplayer().getConfig();
-                    if (config.playlist && config.playlist[0] && config.playlist[0].tracks) {
-                        config.playlist[0].tracks.forEach(t => {
-                            if (t.file && (t.file.includes('.vtt') || t.file.includes('.srt'))) {
-                                found.push(t.file);
-                            }
-                        });
-                    }
-                }
-
-                // 2. Look for script tags with JSON configs
-                document.querySelectorAll('script').forEach(s => {
-                    const content = s.textContent;
-                    if (content.includes('tracks') && content.includes('.vtt')) {
-                        const matches = content.match(/https?:\/\/[^"']+\.(vtt|srt)[^"']*/g);
-                        if (matches) found.push(...matches);
-                    }
-                });
-
-                // 3. Look for video/track elements
-                document.querySelectorAll('track').forEach(t => {
-                    if (t.src) found.push(t.src);
-                });
-
-                return found;
-            });
-
-            tracks.forEach(url => {
-                console.log(`[STEP2] Evaluated Track: ${url}`);
-                if (!vttUrls.find(v => v.url === url)) {
-                    const { lang, code } = detectLang(url);
-                    console.log(`[STEP2] Found subtitle (DOM): ${url} [${code}]`);
-                    vttUrls.push({ url, lang, code });
+            // 2. Look for script tags with JSON configs
+            document.querySelectorAll('script').forEach(s => {
+                const content = s.textContent;
+                if (content.includes('tracks') && content.includes('.vtt')) {
+                    const matches = content.match(/https?:\/\/[^"']+\.(vtt|srt)[^"']*/g);
+                    if (matches) found.push(...matches);
                 }
             });
 
-            const box = await page.locator("body").boundingBox();
-            if (box) {
-                await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-            }
+            // 3. Look for video/track elements
+            document.querySelectorAll('track').forEach(t => {
+                if (t.src) found.push(t.src);
+            });
 
-            await page.waitForTimeout(5000);
-        } catch (err) {
-            console.error(`[STEP2] Navigation error: ${err.message}`);
+            return found;
+        });
+
+        tracks.forEach(url => {
+            console.log(`[STEP2] Evaluated Track: ${url}`);
+            if (!vttUrls.find(v => v.url === url)) {
+                const { lang, code } = detectLang(url);
+                console.log(`[STEP2] Found subtitle (DOM): ${url} [${code}]`);
+                vttUrls.push({ url, lang, code });
+            }
+        });
+
+        const box = await page.locator("body").boundingBox();
+        if (box) {
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         }
 
-        await page.close().catch(() => { });
-        await context.close().catch(() => { });
-    } else {
-        console.log(`[STEP2] [MEMORY OPTIMIZATION] Skipping Playwright since ${vttUrls.length} tracks were found in metadata.`);
+        await page.waitForTimeout(5000);
+    } catch (err) {
+        console.error(`[STEP2] Navigation error: ${err.message}`);
     }
+
+    await page.close().catch(() => { });
+    await context.close().catch(() => { });
 
     const filtered = vttUrls.filter((v) => langs.includes(v.code) || v.code === "und");
     console.log(`[STEP2] Total VTTs: ${vttUrls.length}, filtered: ${filtered.length}`);
@@ -299,12 +273,7 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     for (const track of filtered) {
         try {
             console.log(`[DOWNLOAD] Attempting ${track.url}`);
-            const resp = await fetch(track.url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-                    'Referer': embedUrl
-                }
-            });
+            const resp = await fetch(track.url);
             console.log(`[DOWNLOAD] Status: ${resp.status} for ${track.url}`);
             if (resp.ok) {
                 const content = await resp.text();
@@ -336,20 +305,13 @@ async function handleGetSubtitles(req, res) {
         return res.status(400).json({ error: "Missing tmdb_id parameter" });
     }
 
-    // Concurrency limiter
-    if (activeRequests >= MAX_CONCURRENT) {
-        console.log(`[API] Rejecting request for ${tmdb_id} — too many concurrent requests (${activeRequests}/${MAX_CONCURRENT})`);
-        return res.status(429).json({ error: "Server busy, try again in a few seconds", tmdb_id });
-    }
-
-    activeRequests++;
     const type = data.type || "movie";
     const season = data.season;
     const episode = data.episode;
     const langs = (data.langs || "ar,en").split(",").map((l) => l.trim());
 
     console.log(`\n════════════════════════════════════════════`);
-    console.log(`[API] ${req.method} Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")} (active: ${activeRequests})`);
+    console.log(`[API] ${req.method} Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")}`);
 
     try {
         const embedUrl = await getEmbedUrl(tmdb_id, type, season, episode);
@@ -364,13 +326,6 @@ async function handleGetSubtitles(req, res) {
     } catch (err) {
         console.error(`[API ERROR] ${err.message}`);
         res.status(500).json({ error: "Scraping failed", details: err.message });
-    } finally {
-        activeRequests--;
-        requestCount++;
-        // Recycle browser periodically to free memory
-        if (requestCount >= MAX_REQUESTS_BEFORE_RECYCLE && activeRequests === 0) {
-            await recycleBrowser();
-        }
     }
 }
 
@@ -378,17 +333,7 @@ app.get("/get-subtitles", handleGetSubtitles);
 app.post("/get-subtitles", handleGetSubtitles);
 
 app.get("/", (req, res) => {
-    const memUsage = process.memoryUsage();
-    res.json({
-        status: "running",
-        message: "🎬 Subtitle Scraper API",
-        requestCount,
-        activeRequests,
-        memory: {
-            rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`,
-            heap: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
-        },
-    });
+    res.send("🎬 Subtitle Scraper API is running. Use /get-subtitles?tmdb_id=550");
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────
@@ -428,15 +373,4 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
     if (browser) await browser.close();
     process.exit();
-});
-
-// Prevent crashes from killing the server
-process.on("uncaughtException", (err) => {
-    console.error("[CRASH GUARD] Uncaught exception:", err.message);
-    // Reset browser on crash
-    browser = null;
-});
-process.on("unhandledRejection", (reason) => {
-    console.error("[CRASH GUARD] Unhandled rejection:", reason?.message || reason);
-    browser = null;
 });
