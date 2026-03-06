@@ -32,18 +32,41 @@ const LANG_PATTERNS = [
     { pattern: /_sli\.vtt/i, lang: "Slovenian", code: "sl" },
 ];
 
-// Global browser instance
+// Global browser instance with memory management
 let browser;
+let requestCount = 0;
+const MAX_REQUESTS_BEFORE_RECYCLE = 10; // Recycle browser every N requests
+let activeRequests = 0;
+const MAX_CONCURRENT = 2; // Max simultaneous scraping requests
 
 async function getBrowser() {
     if (!browser || !browser.isConnected()) {
         console.log("Launching fresh browser instance...");
         browser = await chromium.launch({
             headless: true,
-            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--single-process",
+                "--no-zygote",
+                "--js-flags=--max-old-space-size=256",
+            ],
         });
+        requestCount = 0;
     }
     return browser;
+}
+
+async function recycleBrowser() {
+    if (browser) {
+        console.log(`[MEMORY] Recycling browser after ${requestCount} requests...`);
+        try { await browser.close(); } catch (e) { /* ignore */ }
+        browser = null;
+    }
 }
 
 // Label-to-ISO-code mapping for metadata-based subtitle labels
@@ -305,13 +328,20 @@ async function handleGetSubtitles(req, res) {
         return res.status(400).json({ error: "Missing tmdb_id parameter" });
     }
 
+    // Concurrency limiter
+    if (activeRequests >= MAX_CONCURRENT) {
+        console.log(`[API] Rejecting request for ${tmdb_id} — too many concurrent requests (${activeRequests}/${MAX_CONCURRENT})`);
+        return res.status(429).json({ error: "Server busy, try again in a few seconds", tmdb_id });
+    }
+
+    activeRequests++;
     const type = data.type || "movie";
     const season = data.season;
     const episode = data.episode;
     const langs = (data.langs || "ar,en").split(",").map((l) => l.trim());
 
     console.log(`\n════════════════════════════════════════════`);
-    console.log(`[API] ${req.method} Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")}`);
+    console.log(`[API] ${req.method} Request: tmdb_id=${tmdb_id}, type=${type}, langs=${langs.join(",")} (active: ${activeRequests})`);
 
     try {
         const embedUrl = await getEmbedUrl(tmdb_id, type, season, episode);
@@ -326,6 +356,13 @@ async function handleGetSubtitles(req, res) {
     } catch (err) {
         console.error(`[API ERROR] ${err.message}`);
         res.status(500).json({ error: "Scraping failed", details: err.message });
+    } finally {
+        activeRequests--;
+        requestCount++;
+        // Recycle browser periodically to free memory
+        if (requestCount >= MAX_REQUESTS_BEFORE_RECYCLE && activeRequests === 0) {
+            await recycleBrowser();
+        }
     }
 }
 
@@ -333,7 +370,17 @@ app.get("/get-subtitles", handleGetSubtitles);
 app.post("/get-subtitles", handleGetSubtitles);
 
 app.get("/", (req, res) => {
-    res.send("🎬 Subtitle Scraper API is running. Use /get-subtitles?tmdb_id=550");
+    const memUsage = process.memoryUsage();
+    res.json({
+        status: "running",
+        message: "🎬 Subtitle Scraper API",
+        requestCount,
+        activeRequests,
+        memory: {
+            rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`,
+            heap: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
+        },
+    });
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────
