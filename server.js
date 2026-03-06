@@ -61,9 +61,9 @@ function detectLang(url) {
 async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
     let pageUrl;
     if (type === "tv" && season && episode) {
-        pageUrl = `https://moviesapi.club/tv/${tmdbId}-${season}-${episode}`;
+        pageUrl = `https://moviesapi.to/tv/${tmdbId}-${season}-${episode}`;
     } else {
-        pageUrl = `https://moviesapi.club/movie/${tmdbId}`;
+        pageUrl = `https://moviesapi.to/movie/${tmdbId}`;
     }
 
     console.log(`[STEP1] Fetching ${pageUrl} via Playwright...`);
