@@ -177,12 +177,6 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
  */
 async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     console.log(`[STEP2] Scraping subtitles from ${embedUrl} ...`);
-    const b = await getBrowser();
-    const context = await b.newContext({
-        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    });
-    const page = await context.newPage();
-
     const vttUrls = [];
 
     // Check if the URL itself contains subtitle metadata (common in flixcdn)
@@ -216,75 +210,87 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
         // Not a URL with subs param or invalid JSON
     }
 
-    page.on("request", (request) => {
-        const reqUrl = request.url();
-        if (/\.(vtt|srt)(\?.*)?$/i.test(reqUrl)) {
-            if (!vttUrls.find((v) => v.url === reqUrl)) {
-                const { lang, code } = detectLang(reqUrl);
-                console.log(`[STEP2] Found subtitle (${lang}): ${reqUrl}`);
-                vttUrls.push({ url: reqUrl, lang, code });
-            }
-        }
-    });
-
-    try {
-        await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForTimeout(3000);
-
-        // Try extracting tracks directly from DOM/JWPlayer config (More reliable)
-        const tracks = await page.evaluate(() => {
-            const found = [];
-
-            // 1. Look for JWPlayer tracks
-            if (window.jwplayer && window.jwplayer().getConfig) {
-                const config = window.jwplayer().getConfig();
-                if (config.playlist && config.playlist[0] && config.playlist[0].tracks) {
-                    config.playlist[0].tracks.forEach(t => {
-                        if (t.file && (t.file.includes('.vtt') || t.file.includes('.srt'))) {
-                            found.push(t.file);
-                        }
-                    });
-                }
-            }
-
-            // 2. Look for script tags with JSON configs
-            document.querySelectorAll('script').forEach(s => {
-                const content = s.textContent;
-                if (content.includes('tracks') && content.includes('.vtt')) {
-                    const matches = content.match(/https?:\/\/[^"']+\.(vtt|srt)[^"']*/g);
-                    if (matches) found.push(...matches);
-                }
-            });
-
-            // 3. Look for video/track elements
-            document.querySelectorAll('track').forEach(t => {
-                if (t.src) found.push(t.src);
-            });
-
-            return found;
+    // MEMORY OPTIMIZATION: If we found subtitles in the URL metadata, skip Playwright!
+    if (vttUrls.length === 0) {
+        console.log(`[STEP2] No subtitles in URL metadata. Launching Playwright to hunt for tracks...`);
+        const b = await getBrowser();
+        const context = await b.newContext({
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
         });
+        const page = await context.newPage();
 
-        tracks.forEach(url => {
-            console.log(`[STEP2] Evaluated Track: ${url}`);
-            if (!vttUrls.find(v => v.url === url)) {
-                const { lang, code } = detectLang(url);
-                console.log(`[STEP2] Found subtitle (DOM): ${url} [${code}]`);
-                vttUrls.push({ url, lang, code });
+        page.on("request", (request) => {
+            const reqUrl = request.url();
+            if (/\.(vtt|srt)(\?.*)?$/i.test(reqUrl)) {
+                if (!vttUrls.find((v) => v.url === reqUrl)) {
+                    const { lang, code } = detectLang(reqUrl);
+                    console.log(`[STEP2] Found subtitle (${lang}): ${reqUrl}`);
+                    vttUrls.push({ url: reqUrl, lang, code });
+                }
             }
         });
 
-        const box = await page.locator("body").boundingBox();
-        if (box) {
-            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        try {
+            await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await page.waitForTimeout(3000);
+
+            // Try extracting tracks directly from DOM/JWPlayer config (More reliable)
+            const tracks = await page.evaluate(() => {
+                const found = [];
+
+                // 1. Look for JWPlayer tracks
+                if (window.jwplayer && window.jwplayer().getConfig) {
+                    const config = window.jwplayer().getConfig();
+                    if (config.playlist && config.playlist[0] && config.playlist[0].tracks) {
+                        config.playlist[0].tracks.forEach(t => {
+                            if (t.file && (t.file.includes('.vtt') || t.file.includes('.srt'))) {
+                                found.push(t.file);
+                            }
+                        });
+                    }
+                }
+
+                // 2. Look for script tags with JSON configs
+                document.querySelectorAll('script').forEach(s => {
+                    const content = s.textContent;
+                    if (content.includes('tracks') && content.includes('.vtt')) {
+                        const matches = content.match(/https?:\/\/[^"']+\.(vtt|srt)[^"']*/g);
+                        if (matches) found.push(...matches);
+                    }
+                });
+
+                // 3. Look for video/track elements
+                document.querySelectorAll('track').forEach(t => {
+                    if (t.src) found.push(t.src);
+                });
+
+                return found;
+            });
+
+            tracks.forEach(url => {
+                console.log(`[STEP2] Evaluated Track: ${url}`);
+                if (!vttUrls.find(v => v.url === url)) {
+                    const { lang, code } = detectLang(url);
+                    console.log(`[STEP2] Found subtitle (DOM): ${url} [${code}]`);
+                    vttUrls.push({ url, lang, code });
+                }
+            });
+
+            const box = await page.locator("body").boundingBox();
+            if (box) {
+                await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            }
+
+            await page.waitForTimeout(5000);
+        } catch (err) {
+            console.error(`[STEP2] Navigation error: ${err.message}`);
         }
 
-        await page.waitForTimeout(5000);
-    } catch (err) {
-        console.error(`[STEP2] Navigation error: ${err.message}`);
+        await page.close().catch(() => { });
+        await context.close().catch(() => { });
+    } else {
+        console.log(`[STEP2] [MEMORY OPTIMIZATION] Skipping Playwright since ${vttUrls.length} tracks were found in metadata.`);
     }
-
-    await page.close().catch(() => { });
-    await context.close().catch(() => { });
 
     const filtered = vttUrls.filter((v) => langs.includes(v.code) || v.code === "und");
     console.log(`[STEP2] Total VTTs: ${vttUrls.length}, filtered: ${filtered.length}`);
