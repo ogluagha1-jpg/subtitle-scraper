@@ -66,29 +66,55 @@ async function getEmbedUrl(tmdbId, type = "movie", season, episode) {
         pageUrl = `https://moviesapi.club/movie/${tmdbId}`;
     }
 
-    console.log(`[STEP1] Fetching ${pageUrl} ...`);
-    const resp = await fetch(pageUrl, {
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        },
+    console.log(`[STEP1] Fetching ${pageUrl} via Playwright...`);
+    const b = await getBrowser();
+    const context = await b.newContext({
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
     });
+    const page = await context.newPage();
 
-    if (!resp.ok) {
-        throw new Error(`moviesapi.club returned ${resp.status}`);
-    }
+    try {
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
-    const html = await resp.text();
+        // Wait for potential redirects and iframe loading
+        await page.waitForTimeout(2000);
 
-    const iframeMatch = html.match(/src="(https?:\/\/[^"]*vidora\.stream\/embed\/[^"]*)"/i)
-        || html.match(/src="(https?:\/\/[^"]*embed[^"]*)"/i);
+        // Find the most likely player iframe
+        const embedUrl = await page.evaluate(() => {
+            const iframes = Array.from(document.querySelectorAll('iframe'));
+            // prioritize vidora, flixcdn, or any src with 'embed'
+            const playerIframe = iframes.find(f =>
+                f.src.includes('vidora.stream') ||
+                f.src.includes('flixcdn.cyou') ||
+                f.src.includes('/embed/') ||
+                f.src.includes('vidsrc')
+            );
+            return playerIframe ? playerIframe.src : null;
+        });
 
-    if (!iframeMatch) {
-        console.log(`[STEP1] Could not find embed iframe in HTML. HTML sample: ${html.substring(0, 500)}`);
+        if (embedUrl) {
+            console.log(`[STEP1] Found embed URL: ${embedUrl}`);
+            return embedUrl;
+        }
+
+        // Fallback to searching the whole HTML if iframe not found via selector
+        const html = await page.content();
+        const iframeMatch = html.match(/src="(https?:\/\/[^"]+(vidora\.stream|flixcdn\.cyou|vidsrc|embed)[^"]*)"/i);
+
+        if (iframeMatch) {
+            console.log(`[STEP1] Found embed URL (Regex): ${iframeMatch[1]}`);
+            return iframeMatch[1];
+        }
+
+        console.log(`[STEP1] No player iframe found for ID ${tmdbId}`);
         return null;
+    } catch (err) {
+        console.error(`[STEP1 ERROR] ${err.message}`);
+        return null;
+    } finally {
+        await page.close().catch(() => { });
+        await context.close().catch(() => { });
     }
-
-    console.log(`[STEP1] Found embed URL: ${iframeMatch[1]}`);
-    return iframeMatch[1];
 }
 
 /**
@@ -104,6 +130,29 @@ async function scrapeSubtitles(embedUrl, langs = ["en", "ar"]) {
     const page = await context.newPage();
 
     const vttUrls = [];
+
+    // Check if the URL itself contains subtitle metadata (common in flixcdn)
+    try {
+        const urlObj = new URL(embedUrl);
+        const subsParam = urlObj.searchParams.get('subs') || (embedUrl.includes('#') ? new URLSearchParams(embedUrl.split('#')[1]).get('subs') : null);
+        if (subsParam) {
+            console.log(`[STEP2] Found 'subs' parameter in URL`);
+            const decodedSubs = JSON.parse(decodeURIComponent(subsParam));
+            if (Array.isArray(decodedSubs)) {
+                decodedSubs.forEach(s => {
+                    if (s.url && !vttUrls.find(v => v.url === s.url)) {
+                        const { lang, code } = detectLang(s.url);
+                        // If metadata provides a label, use it
+                        const finalLang = s.label || lang;
+                        console.log(`[STEP2] Found subtitle (URL Metadata - ${finalLang}): ${s.url}`);
+                        vttUrls.push({ url: s.url, lang: finalLang, code });
+                    }
+                });
+            }
+        }
+    } catch (e) {
+        // Not a URL with subs param or invalid JSON
+    }
 
     page.on("request", (request) => {
         const reqUrl = request.url();
