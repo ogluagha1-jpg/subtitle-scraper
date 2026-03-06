@@ -245,6 +245,25 @@ app.get("/", (req, res) => {
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 
+app.get("/debug-screenshot", async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send("URL required");
+
+    let browser;
+    try {
+        browser = await getBrowser();
+        const page = await browser.newPage();
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        const buffer = await page.screenshot({ fullPage: true });
+        res.setHeader('Content-Type', 'image/png');
+        res.send(buffer);
+    } catch (err) {
+        res.status(500).send(err.message);
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Subtitle Scraper API listening on port ${PORT}`);
     getBrowser()
